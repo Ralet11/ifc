@@ -7,7 +7,9 @@ const puppeteer = require('puppeteer');
 
 const {
   FB_EMAIL, FB_PASSWORD,
-  TELEGRAM_TOKEN, TELEGRAM_CHAT_ID,
+  TELEGRAM_CHAT_ID,
+  TELEGRAM_CHAT_IDS,
+  TELEGRAM_TOKEN,
   KEYWORD, INTERVAL_CRON
 } = process.env;
 
@@ -20,13 +22,34 @@ if (!fs.existsSync(DATA_FILE))     fs.writeFileSync(DATA_FILE, '[]');
 const loadSeen = () => new Set(JSON.parse(fs.readFileSync(DATA_FILE)));
 const saveSeen = set => fs.writeFileSync(DATA_FILE, JSON.stringify([...set], null, 2));
 
+// ─── Construcción del array de chat IDs ─────────────────────────────
+const CHAT_IDS = (
+  TELEGRAM_CHAT_IDS
+    ? TELEGRAM_CHAT_IDS.split(',').map(s => s.trim())
+    : [TELEGRAM_CHAT_ID]
+).filter(Boolean);
+
+if (!TELEGRAM_TOKEN || CHAT_IDS.length === 0) {
+  console.error('❌ Debes definir TELEGRAM_TOKEN y al menos un TELEGRAM_CHAT_ID(S) en .env');
+  process.exit(1);
+}
+
 const delay = ms => new Promise(r => setTimeout(r, ms));
+
+// ─── Función para enviar a todos los chats ───────────────────────────
 async function sendTelegram(text) {
-  await axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
-    chat_id: TELEGRAM_CHAT_ID,
-    text,
-    disable_web_page_preview: true
-  });
+  for (const chatId of CHAT_IDS) {
+    try {
+      await axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
+        chat_id: chatId,
+        text,
+        disable_web_page_preview: true
+      });
+      console.log(`📨 Enviado a chat ${chatId}`);
+    } catch (e) {
+      console.error(`❌ Error enviando a ${chatId}:`, e.message);
+    }
+  }
 }
 
 // ─── Configuración de Marketplace ─────────────────────────────────────
@@ -38,7 +61,7 @@ const MP_URL =
 // ─── Variables de estado para el navegador ────────────────────────────
 let browser = null;
 let launchCount = 0;
-const MAX_LAUNCHES = 12; // tras 12 ejecuciones reiniciamos el navegador
+const MAX_LAUNCHES = 12; // tras 12 ejecuciones reiniciamos Chromium
 
 // ─── Inicializa o reinicia el browser según sea necesario ──────────────
 async function initBrowser() {
@@ -72,7 +95,7 @@ async function run() {
     await initBrowser();
     launchCount++;
 
-    // 2) Creamos una nueva pestaña
+    // 2) Creamos y configuramos una nueva pestaña
     const page = await browser.newPage();
     await page.setUserAgent(
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64) ' +
@@ -81,6 +104,7 @@ async function run() {
     );
 
     // 3) Navegamos e hicimos login si es necesario
+    console.log('🌐 Navegando a Marketplace con filtros...');
     await page.goto(MP_URL, { waitUntil: 'networkidle2' });
     if (page.url().includes('/login')) {
       console.log('🔐 Logueando de nuevo…');
